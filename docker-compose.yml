@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  hyperflow:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - COINGECKO_API_KEY=${COINGECKO_API_KEY:-}
+      - DATABASE_PATH=/app/data/market_data.db
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8501/_stcore/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
