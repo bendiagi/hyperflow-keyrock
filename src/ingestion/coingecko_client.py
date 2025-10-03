@@ -22,14 +22,10 @@ class CoinGeckoClient:
     def __init__(self):
         self.base_url = Config.COINGECKO_BASE_URL
         self.session = requests.Session()
-        headers = {
+        self.session.headers.update({
             'User-Agent': 'HyperFlow/1.0.0',
             'Accept': 'application/json'
-        }
-        # Use CoinGecko Pro key when provided so usage reflects under account
-        if Config.COINGECKO_API_KEY:
-            headers['x-cg-pro-api-key'] = Config.COINGECKO_API_KEY
-        self.session.headers.update(headers)
+        })
         self.rate_limit_delay = 60 / Config.API_RATE_LIMIT  # seconds between requests
         self.last_request_time = 0
         
