@@ -250,3 +250,38 @@ class DataProcessor:
         
         logger.info(f"Resampled data to {freq} frequency: {len(resampled)} records")
         return resampled
+
+    @staticmethod
+    def build_ohlcv_from_ticks(price_df: pd.DataFrame, volume_df: pd.DataFrame = None, freq: str = '30min') -> pd.DataFrame:
+        """
+        Build OHLCV candles from tick-level series (prices and optional volumes).
+
+        Args:
+            price_df: DataFrame with columns ['timestamp','price']
+            volume_df: Optional DataFrame with columns ['timestamp','volume'] (base currency volume)
+            freq: Resample frequency like '30min', '15min', etc.
+
+        Returns:
+            DataFrame with columns ['timestamp','open','high','low','close','volume']
+        """
+        if price_df is None or price_df.empty or 'timestamp' not in price_df.columns or 'price' not in price_df.columns:
+            return pd.DataFrame()
+
+        prices = price_df.copy().sort_values('timestamp')
+        prices = prices.set_index('timestamp')
+
+        # Resample prices to OHLC using first/max/min/last
+        ohlc = prices['price'].resample(freq).ohlc()
+
+        # Attach volumes if provided
+        if volume_df is not None and not volume_df.empty and 'timestamp' in volume_df.columns and 'volume' in volume_df.columns:
+            vols = volume_df.copy().sort_values('timestamp').set_index('timestamp')
+            vol_resampled = vols['volume'].resample(freq).sum()
+            out = ohlc.join(vol_resampled, how='left')
+        else:
+            out = ohlc
+            out['volume'] = 0.0
+
+        out = out.dropna(subset=['open','high','low','close']).reset_index()
+        out = out.rename(columns={'timestamp': 'timestamp'})
+        return out
