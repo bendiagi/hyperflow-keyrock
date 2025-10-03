@@ -45,15 +45,12 @@ class StreamlitDashboard:
         """Run the Streamlit dashboard"""
         st.title("🚀 HyperFlow - Market Data Dashboard")
         st.markdown("**Automated Market Data Pipeline with LLM-powered Insights**")
-        
         # Auto-refresh UI to pick latest DB rows (does not call external APIs)
-        st.autorefresh = st.experimental_rerun if False else None  # placeholder for type hints
-        st.session_state.setdefault('auto_refresh_interval_ms', 60000)
-        st_autorefresh = st.experimental_rerun  # no-op alias to avoid lints
         try:
             from streamlit_autorefresh import st_autorefresh as _st_autorefresh
-            _st_autorefresh(interval=st.session_state['auto_refresh_interval_ms'], key="auto_refresh")
+            _st_autorefresh(interval=60000, key="auto_refresh")
         except Exception:
+            # If optional dependency not installed, skip auto-refresh
             pass
         
         # Sidebar
@@ -126,7 +123,6 @@ class StreamlitDashboard:
         
         if refresh_now:
             self._attempt_refresh()
-            st.experimental_rerun()
         
         # Get data
         data = self._get_coin_data(coin, time_range)
@@ -221,7 +217,8 @@ class StreamlitDashboard:
             pass
         
         try:
-            subprocess.Popen(["python", "run_pipeline.py"])  # fire-and-forget
+            # Use module execution so package-relative imports work
+            subprocess.Popen(["python", "-m", "src.main"])  # fire-and-forget
             st.info("Refresh started. This may take ~5-10s. The page will auto-update.")
         except Exception as e:
             st.error(f"Failed to start refresh: {e}")
