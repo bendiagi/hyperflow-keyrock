@@ -46,6 +46,16 @@ class StreamlitDashboard:
         st.title("🚀 HyperFlow - Market Data Dashboard")
         st.markdown("**Automated Market Data Pipeline with LLM-powered Insights**")
         
+        # Auto-refresh UI to pick latest DB rows (does not call external APIs)
+        st.autorefresh = st.experimental_rerun if False else None  # placeholder for type hints
+        st.session_state.setdefault('auto_refresh_interval_ms', 60000)
+        st_autorefresh = st.experimental_rerun  # no-op alias to avoid lints
+        try:
+            from streamlit_autorefresh import st_autorefresh as _st_autorefresh
+            _st_autorefresh(interval=st.session_state['auto_refresh_interval_ms'], key="auto_refresh")
+        except Exception:
+            pass
+        
         # Sidebar
         self._render_sidebar()
         
@@ -103,6 +113,20 @@ class StreamlitDashboard:
         
         coin = st.session_state.selected_coin
         time_range = st.session_state.time_range
+        
+        # Freshness bar: show last ingested time and manual refresh
+        top_col1, top_col2, top_col3 = st.columns([2,1,1])
+        with top_col1:
+            last_updated = self._get_last_updated()
+            st.caption(f"Last updated: {last_updated if last_updated else 'N/A'}")
+        with top_col2:
+            refresh_now = st.button("Refresh now")
+        with top_col3:
+            st.caption("Auto refresh: 60s")
+        
+        if refresh_now:
+            self._attempt_refresh()
+            st.experimental_rerun()
         
         # Get data
         data = self._get_coin_data(coin, time_range)
@@ -170,6 +194,37 @@ class StreamlitDashboard:
         except Exception as e:
             logger.error(f"Error getting coin data: {e}")
             return pd.DataFrame()
+    
+    def _get_last_updated(self) -> str:
+        """Get last ingested timestamp from ETL logs"""
+        try:
+            logs = self.db_connection.get_etl_logs(limit=1)
+            if logs:
+                return logs[0].get('timestamp')
+        except Exception as e:
+            logger.error(f"Error fetching last updated: {e}")
+        return ""
+    
+    def _attempt_refresh(self):
+        """Attempt to refresh pipeline run with 5-min backoff"""
+        import subprocess, time
+        
+        # Check last run
+        try:
+            logs = self.db_connection.get_etl_logs(limit=1)
+            if logs:
+                last_ts = pd.to_datetime(logs[0].get('timestamp'))
+                if (pd.Timestamp.utcnow() - last_ts) < pd.Timedelta(minutes=5):
+                    st.warning("Recent run detected. Please try again in a few minutes.")
+                    return
+        except Exception:
+            pass
+        
+        try:
+            subprocess.Popen(["python", "run_pipeline.py"])  # fire-and-forget
+            st.info("Refresh started. This may take ~5-10s. The page will auto-update.")
+        except Exception as e:
+            st.error(f"Failed to start refresh: {e}")
     
     def _render_charts(self, data: pd.DataFrame, coin: str):
         """Render price and volume charts"""
@@ -239,7 +294,7 @@ class StreamlitDashboard:
             height=600
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
         
         # Additional charts
         col1, col2 = st.columns(2)
@@ -261,7 +316,7 @@ class StreamlitDashboard:
                     xaxis_title="Time",
                     yaxis_title="Volatility"
                 )
-                st.plotly_chart(fig_vol, use_container_width=True)
+                st.plotly_chart(fig_vol, width='stretch')
         
         with col2:
             # RSI chart
@@ -283,7 +338,7 @@ class StreamlitDashboard:
                     yaxis_title="RSI",
                     yaxis=dict(range=[0, 100])
                 )
-                st.plotly_chart(fig_rsi, use_container_width=True)
+                st.plotly_chart(fig_rsi, width='stretch')
     
     def _render_anomalies(self, coin: str):
         """Render anomaly detection results"""
