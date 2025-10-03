@@ -516,6 +516,19 @@ class StreamlitDashboard:
                     summary["sma_7"] = float(data['sma_7'].iloc[-1])
                 if 'sma_30' in data.columns:
                     summary["sma_30"] = float(data['sma_30'].iloc[-1])
+                # Include last 24 four-hour candles for concrete recent context
+                recent = data.tail(24)[['timestamp','open','high','low','close']].copy()
+                recent['timestamp'] = recent['timestamp'].astype(str)
+                summary["recent_ohlc_24x4h"] = [
+                    {
+                        "t": str(row['timestamp']),
+                        "o": float(row['open']),
+                        "h": float(row['high']),
+                        "l": float(row['low']),
+                        "c": float(row['close'])
+                    }
+                    for _, row in recent.iterrows()
+                ]
         except Exception:
             pass
         
