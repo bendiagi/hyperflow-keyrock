@@ -117,12 +117,12 @@ class StreamlitDashboard:
             last_updated = self._get_last_updated()
             st.caption(f"Last updated: {last_updated if last_updated else 'N/A'}")
         with top_col2:
-            refresh_now = st.button("Refresh now")
+            refresh_now = st.button("Refresh now (30d / 4H)")
         with top_col3:
             st.caption("Auto refresh: 60s")
         
         if refresh_now:
-            self._refresh_last_24h(coin)
+            self._refresh_ohlc_30d(coin)
         
         # Get data
         data = self._get_coin_data(coin, time_range)
@@ -222,48 +222,25 @@ class StreamlitDashboard:
         except Exception as e:
             st.error(f"Failed to start full refresh: {e}")
 
-    def _refresh_last_24h(self, coin: str):
-        """Fetch last 24h via market_chart/range, resample to 30-min, and replace recent rows"""
-        import time
+    def _refresh_ohlc_30d(self, coin: str):
+        """Fetch last 30d OHLC (4H) from CoinGecko and replace this coin's rows"""
         import pandas as pd
         from ingestion.coingecko_client import CoinGeckoClient
-        from ingestion.data_processor import DataProcessor
-        
         try:
-            now_sec = int(time.time())
-            from_sec = now_sec - 24 * 3600
             client = CoinGeckoClient()
-            data = client.get_coin_price_history_range(coin, vs_currency="usd", from_ts=from_sec, to_ts=now_sec)
-            if not data or 'prices' not in data:
-                st.warning("No data returned for last 24h.")
+            raw = client.get_ohlcv_data(coin_id=coin, days=30)
+            if not raw:
+                st.warning("No OHLC data returned.")
                 return
-            # Build DataFrame with price and volume
-            prices = data.get('prices', [])
-            volumes = data.get('total_volumes', [])
-            price_df = pd.DataFrame(prices, columns=['timestamp', 'close'])
-            price_df['timestamp'] = pd.to_datetime(price_df['timestamp'], unit='ms')
-            vol_df = pd.DataFrame(volumes, columns=['timestamp', 'volume']) if volumes else pd.DataFrame(columns=['timestamp','volume'])
-            if not vol_df.empty:
-                vol_df['timestamp'] = pd.to_datetime(vol_df['timestamp'], unit='ms')
-                df = price_df.merge(vol_df, on='timestamp', how='left')
-            else:
-                df = price_df
-                df['volume'] = 0.0
-            # Derive OHLC from close (approx) for 30-min buckets by forward-filling
-            df = df.sort_values('timestamp')
-            df['open'] = df['close']
-            df['high'] = df['close']
-            df['low'] = df['close']
-            df = df[['timestamp','open','high','low','close','volume']]
-            # Resample to 30 minutes
-            df_30 = DataProcessor.resample_data(df, freq='30T')
-            df_30['coin'] = coin
-            # Replace last 24h for coin
-            since_iso = (pd.Timestamp.utcnow() - pd.Timedelta(hours=24)).isoformat()
-            deleted = self.db_connection.delete_data_since(coin, since_iso)
-            self.db_connection.insert_ohlcv_data(df_30.to_dict('records'))
-            self.db_connection.insert_etl_log(coin=coin, status='success', message=f'refresh_24h_30m: {len(df_30)} rows (deleted {deleted})', records_processed=len(df_30))
-            st.success("Refreshed last 24h (30-min). Page will show latest on next auto-update.")
+            df = pd.DataFrame(raw, columns=['timestamp','open','high','low','close'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df['volume'] = 0.0
+            df['coin'] = coin
+            # purge and insert
+            self.db_connection.execute_update("DELETE FROM ohlcv WHERE coin = ?", (coin,))
+            self.db_connection.insert_ohlcv_data(df[['coin','timestamp','open','high','low','close','volume']].to_dict('records'))
+            self.db_connection.insert_etl_log(coin=coin, status='success', message=f'refresh_30d_4h: {len(df)} rows', records_processed=len(df))
+            st.success("Refreshed 30d (4H) OHLC. Data will update on next auto-refresh.")
         except Exception as e:
             st.error(f"Refresh failed: {e}")
     
@@ -510,26 +487,70 @@ class StreamlitDashboard:
         """Render AI-powered insights"""
         st.header("🤖 AI Insights")
         
-        st.info("AI insights feature will be implemented in the next phase with GPT integration.")
+        # Lazy import to avoid hard dependency when key is missing
+        try:
+            try:
+                from llm.gpt_client import GPTClient
+            except ImportError:
+                from ..llm.gpt_client import GPTClient
+        except Exception as _e:
+            st.warning("GPT client unavailable. Check installation.")
+            return
         
-        # Placeholder for AI insights
-        st.write("**Coming Soon:**")
-        st.write("- Natural language queries about market data")
-        st.write("- Automated market analysis and insights")
-        st.write("- Trading recommendations based on patterns")
-        st.write("- Risk assessment and alerts")
+        # Build a lightweight data summary for the model
+        summary = {}
+        try:
+            if not data.empty:
+                summary = {
+                    "coin": coin,
+                    "records": int(len(data)),
+                    "start": str(data['timestamp'].iloc[0]),
+                    "end": str(data['timestamp'].iloc[-1]),
+                    "last_price": float(data['close'].iloc[-1]),
+                }
+                if 'volatility' in data.columns:
+                    summary["last_volatility"] = float(data['volatility'].iloc[-1])
+                if 'rsi' in data.columns:
+                    summary["last_rsi"] = float(data['rsi'].iloc[-1])
+                if 'sma_7' in data.columns:
+                    summary["sma_7"] = float(data['sma_7'].iloc[-1])
+                if 'sma_30' in data.columns:
+                    summary["sma_30"] = float(data['sma_30'].iloc[-1])
+        except Exception:
+            pass
         
-        # Sample query interface
-        st.subheader("Sample Queries")
-        sample_queries = [
-            f"What's {coin.upper()}'s volatility trend?",
-            f"Show me {coin.upper()}'s price anomalies",
-            f"Analyze {coin.upper()}'s volume patterns",
-            f"What are the key metrics for {coin.upper()}?"
-        ]
+        client = None
+        try:
+            client = GPTClient()
+        except Exception as e:
+            st.warning("OpenAI client not configured. Set OPENAI_API_KEY to enable AI Insights.")
+            return
         
-        for query in sample_queries:
-            st.write(f"• {query}")
+        # Quick health check (non-blocking if it fails)
+        healthy = False
+        try:
+            healthy = client.health_check()
+        except Exception:
+            healthy = False
+        if not healthy:
+            st.warning("AI service unavailable right now. Insights may not work.")
+        
+        # UI: summary + Q&A
+        col1, col2 = st.columns([1,1])
+        with col1:
+            if st.button("Generate market summary"):
+                with st.spinner("Generating summary..."):
+                    resp = client.generate_market_summary(summary)
+                st.markdown(resp)
+        with col2:
+            question = st.text_area("Ask a question about the data", key="ai_q", height=100, placeholder=f"e.g., What stands out for {coin.upper()} in the last 30 days?")
+            if st.button("Analyze question"):
+                if not question.strip():
+                    st.warning("Please enter a question.")
+                else:
+                    with st.spinner("Analyzing..."):
+                        resp = client.analyze_market_data(summary, question.strip())
+                    st.markdown(resp)
 
 def main():
     """Main function to run the dashboard"""
