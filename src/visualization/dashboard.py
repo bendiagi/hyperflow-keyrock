@@ -316,18 +316,21 @@ class StreamlitDashboard:
                 row=1, col=1
             )
         
-        # Volume chart
-        colors = ['red' if x else 'green' for x in data.get('volume_anomaly', [False] * len(data))]
-        
-        fig.add_trace(
-            go.Bar(
-                x=data['timestamp'],
-                y=data['volume'],
-                name="Volume",
-                marker_color=colors
-            ),
-            row=2, col=1
-        )
+        # Volume chart (may be all zeros if OHLC endpoint used)
+        if 'volume' in data.columns:
+            colors = ['red' if x else 'green' for x in data.get('volume_anomaly', [False] * len(data))]
+            fig.add_trace(
+                go.Bar(
+                    x=data['timestamp'],
+                    y=data['volume'],
+                    name="Volume",
+                    marker_color=colors
+                ),
+                row=2, col=1
+            )
+        else:
+            fig.update_yaxes(visible=False, row=2, col=1)
+            fig.update_xaxes(visible=False, row=2, col=1)
         
         fig.update_layout(
             title=f"{coin.upper()} OHLCV Chart",
