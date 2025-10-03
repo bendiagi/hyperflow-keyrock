@@ -122,7 +122,7 @@ class StreamlitDashboard:
             st.caption("Auto refresh: 60s")
         
         if refresh_now:
-            self._attempt_refresh()
+            self._refresh_last_24h(coin)
         
         # Get data
         data = self._get_coin_data(coin, time_range)
@@ -217,11 +217,55 @@ class StreamlitDashboard:
             pass
         
         try:
-            # Use module execution so package-relative imports work
-            subprocess.Popen(["python", "-m", "src.main"])  # fire-and-forget
-            st.info("Refresh started. This may take ~5-10s. The page will auto-update.")
+            subprocess.Popen(["python", "-m", "src.main"])  # fallback full pipeline
+            st.info("Full refresh started. This may take ~10–20s.")
         except Exception as e:
-            st.error(f"Failed to start refresh: {e}")
+            st.error(f"Failed to start full refresh: {e}")
+
+    def _refresh_last_24h(self, coin: str):
+        """Fetch last 24h via market_chart/range, resample to 30-min, and replace recent rows"""
+        import time
+        import pandas as pd
+        from ingestion.coingecko_client import CoinGeckoClient
+        from ingestion.data_processor import DataProcessor
+        
+        try:
+            now_sec = int(time.time())
+            from_sec = now_sec - 24 * 3600
+            client = CoinGeckoClient()
+            data = client.get_coin_price_history_range(coin, vs_currency="usd", from_ts=from_sec, to_ts=now_sec)
+            if not data or 'prices' not in data:
+                st.warning("No data returned for last 24h.")
+                return
+            # Build DataFrame with price and volume
+            prices = data.get('prices', [])
+            volumes = data.get('total_volumes', [])
+            price_df = pd.DataFrame(prices, columns=['timestamp', 'close'])
+            price_df['timestamp'] = pd.to_datetime(price_df['timestamp'], unit='ms')
+            vol_df = pd.DataFrame(volumes, columns=['timestamp', 'volume']) if volumes else pd.DataFrame(columns=['timestamp','volume'])
+            if not vol_df.empty:
+                vol_df['timestamp'] = pd.to_datetime(vol_df['timestamp'], unit='ms')
+                df = price_df.merge(vol_df, on='timestamp', how='left')
+            else:
+                df = price_df
+                df['volume'] = 0.0
+            # Derive OHLC from close (approx) for 30-min buckets by forward-filling
+            df = df.sort_values('timestamp')
+            df['open'] = df['close']
+            df['high'] = df['close']
+            df['low'] = df['close']
+            df = df[['timestamp','open','high','low','close','volume']]
+            # Resample to 30 minutes
+            df_30 = DataProcessor.resample_data(df, freq='30T')
+            df_30['coin'] = coin
+            # Replace last 24h for coin
+            since_iso = (pd.Timestamp.utcnow() - pd.Timedelta(hours=24)).isoformat()
+            deleted = self.db_connection.delete_data_since(coin, since_iso)
+            self.db_connection.insert_ohlcv_data(df_30.to_dict('records'))
+            self.db_connection.insert_etl_log(coin=coin, status='success', message=f'refresh_24h_30m: {len(df_30)} rows (deleted {deleted})', records_processed=len(df_30))
+            st.success("Refreshed last 24h (30-min). Page will show latest on next auto-update.")
+        except Exception as e:
+            st.error(f"Refresh failed: {e}")
     
     def _render_charts(self, data: pd.DataFrame, coin: str):
         """Render price and volume charts"""

@@ -118,6 +118,17 @@ class CoinGeckoClient:
         
         endpoint = f"coins/{coin_id}/market_chart"
         return self._make_request(endpoint, params)
+
+    def get_coin_price_history_range(self, coin_id: str, vs_currency: str, from_ts: int, to_ts: int) -> Dict[str, Any]:
+        """Get price/volume history for a unix time range (seconds)"""
+        logger.info(f"Fetching price history range for {coin_id} ({from_ts} -> {to_ts})")
+        params = {
+            "vs_currency": vs_currency,
+            "from": from_ts,
+            "to": to_ts,
+        }
+        endpoint = f"coins/{coin_id}/market_chart/range"
+        return self._make_request(endpoint, params)
     
     def search_coin(self, query: str) -> List[Dict[str, Any]]:
         """Search for coins by name or symbol"""

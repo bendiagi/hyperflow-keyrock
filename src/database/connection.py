@@ -204,6 +204,14 @@ class DatabaseConnection:
             ORDER BY timestamp ASC
         """
         return self.execute_query(query, (coin, start_date, end_date))
+
+    def delete_data_since(self, coin: str, since_timestamp: str) -> int:
+        """Delete OHLCV rows for coin since given ISO timestamp (inclusive)"""
+        query = """
+            DELETE FROM ohlcv
+            WHERE coin = ? AND timestamp >= ?
+        """
+        return self.execute_update(query, (coin, since_timestamp))
     
     def get_anomalies(self, coin: str = None, limit: int = 100) -> List[Dict[str, Any]]:
         """Get anomaly records"""
