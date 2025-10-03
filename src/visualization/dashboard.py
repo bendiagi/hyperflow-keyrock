@@ -335,7 +335,7 @@ class StreamlitDashboard:
             height=600
         )
         
-        st.plotly_chart(fig, width='stretch')
+        st.plotly_chart(fig, config={"responsive": True, "displaylogo": False})
         
         # Additional charts
         col1, col2 = st.columns(2)
@@ -357,7 +357,7 @@ class StreamlitDashboard:
                     xaxis_title="Time",
                     yaxis_title="Volatility"
                 )
-                st.plotly_chart(fig_vol, width='stretch')
+                st.plotly_chart(fig_vol, config={"responsive": True, "displaylogo": False})
         
         with col2:
             # RSI chart
@@ -379,7 +379,7 @@ class StreamlitDashboard:
                     yaxis_title="RSI",
                     yaxis=dict(range=[0, 100])
                 )
-                st.plotly_chart(fig_rsi, width='stretch')
+                st.plotly_chart(fig_rsi, config={"responsive": True, "displaylogo": False})
     
     def _render_anomalies(self, coin: str):
         """Render anomaly detection results"""
@@ -432,7 +432,7 @@ class StreamlitDashboard:
                     xaxis_title="Date",
                     yaxis_title="Number of Anomalies"
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, config={"responsive": True, "displaylogo": False})
     
     def _render_metrics(self, data: pd.DataFrame, coin: str):
         """Render financial metrics"""
