@@ -21,15 +21,11 @@ COPY . .
 # Create data directory
 RUN mkdir -p data
 
-# Expose Streamlit port
+# Expose (optional; Railway provides PORT env at runtime)
 EXPOSE 8501
 
-# Set environment variables
-ENV STREAMLIT_SERVER_PORT=8501
-ENV STREAMLIT_SERVER_ADDRESS=0.0.0.0
+# Health check (use PORT if provided)
+HEALTHCHECK CMD python -c "import os,requests; requests.get(f'http://localhost:{os.environ.get("PORT","8501")}/_stcore/health')" || exit 1
 
-# Health check
-HEALTHCHECK CMD python -c "import requests; requests.get('http://localhost:8501/_stcore/health')" || exit 1
-
-# Run Streamlit app
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+# Run Streamlit app on provided PORT (fallback 8501)
+CMD ["sh", "-c", "streamlit run app.py --server.address 0.0.0.0 --server.port ${PORT:-8501}"]

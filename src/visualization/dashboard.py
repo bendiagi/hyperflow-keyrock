@@ -233,8 +233,25 @@ class StreamlitDashboard:
                 st.warning("No OHLC data returned.")
                 return
             df = pd.DataFrame(raw, columns=['timestamp','open','high','low','close'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df['volume'] = 0.0
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True).dt.tz_convert(None)
+
+            # Fetch coin volume from market_chart/range over same 30d window and resample to 4H sums
+            try:
+                end_ts = int(pd.Timestamp.utcnow().timestamp())
+                start_ts = end_ts - 30 * 24 * 3600
+                range_payload = client.get_coin_price_history_range(coin, vs_currency="usd", from_ts=start_ts, to_ts=end_ts)
+                vol_points = range_payload.get('total_volumes', []) if range_payload else []
+                if vol_points:
+                    vdf = pd.DataFrame(vol_points, columns=['timestamp','volume'])
+                    vdf['timestamp'] = pd.to_datetime(vdf['timestamp'], unit='ms', utc=True).dt.tz_convert(None)
+                    vdf = vdf.set_index('timestamp').sort_index()
+                    vdf_4h = vdf.resample('4h', label='right', closed='right').sum().reset_index()
+                    df = df.merge(vdf_4h, on='timestamp', how='left')
+                else:
+                    df['volume'] = 0.0
+            except Exception:
+                df['volume'] = 0.0
+            df['volume'] = df['volume'].fillna(0.0)
             df['coin'] = coin
             # purge and insert
             self.db_connection.execute_update("DELETE FROM ohlcv WHERE coin = ?", (coin,))

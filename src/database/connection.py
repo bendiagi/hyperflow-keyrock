@@ -10,6 +10,13 @@ from contextlib import contextmanager
 import os
 
 try:
+    import psycopg
+    from psycopg.rows import dict_row
+except Exception:  # psycopg is optional for local sqlite usage
+    psycopg = None
+    dict_row = None
+
+try:
     from ..config import Config
 except ImportError:
     from config import Config
@@ -17,11 +24,14 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 class DatabaseConnection:
-    """SQLite database connection manager"""
+    """Database connection manager with SQLite (default) and Postgres support"""
     
     def __init__(self, db_path: Optional[str] = None):
+        self.database_url = os.getenv("DATABASE_URL")
+        self.is_postgres = bool(self.database_url)
         self.db_path = db_path or Config.DATABASE_PATH
-        self._ensure_data_directory()
+        if not self.is_postgres:
+            self._ensure_data_directory()
         self._create_tables()
     
     def _ensure_data_directory(self):
@@ -35,55 +45,107 @@ class DatabaseConnection:
         """Create database tables if they don't exist"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            
-            # Create OHLCV table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS ohlcv (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    coin TEXT NOT NULL,
-                    timestamp TEXT NOT NULL,
-                    open REAL NOT NULL,
-                    high REAL NOT NULL,
-                    low REAL NOT NULL,
-                    close REAL NOT NULL,
-                    volume REAL NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(coin, timestamp)
+            if self.is_postgres:
+                # Postgres schema
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS ohlcv (
+                        id BIGSERIAL PRIMARY KEY,
+                        coin TEXT NOT NULL,
+                        timestamp TIMESTAMPTZ NOT NULL,
+                        open DOUBLE PRECISION NOT NULL,
+                        high DOUBLE PRECISION NOT NULL,
+                        low DOUBLE PRECISION NOT NULL,
+                        close DOUBLE PRECISION NOT NULL,
+                        volume DOUBLE PRECISION NOT NULL,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        UNIQUE(coin, timestamp)
+                    )
+                    """
                 )
-            """)
-            
-            # Create ETL logs table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS etl_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    coin TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    message TEXT,
-                    records_processed INTEGER DEFAULT 0,
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS etl_logs (
+                        id BIGSERIAL PRIMARY KEY,
+                        coin TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        message TEXT,
+                        records_processed INTEGER DEFAULT 0,
+                        timestamp TIMESTAMPTZ DEFAULT NOW()
+                    )
+                    """
                 )
-            """)
-            
-            # Create anomalies table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS anomalies (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    coin TEXT NOT NULL,
-                    timestamp TEXT NOT NULL,
-                    anomaly_type TEXT NOT NULL,
-                    value REAL NOT NULL,
-                    zscore REAL NOT NULL,
-                    threshold REAL NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS anomalies (
+                        id BIGSERIAL PRIMARY KEY,
+                        coin TEXT NOT NULL,
+                        timestamp TIMESTAMPTZ NOT NULL,
+                        anomaly_type TEXT NOT NULL,
+                        value DOUBLE PRECISION NOT NULL,
+                        zscore DOUBLE PRECISION NOT NULL,
+                        threshold DOUBLE PRECISION NOT NULL,
+                        created_at TIMESTAMPTZ DEFAULT NOW()
+                    )
+                    """
                 )
-            """)
-            
-            # Create indexes for better performance
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_coin_timestamp ON ohlcv(coin, timestamp)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_etl_logs_coin_timestamp ON etl_logs(coin, timestamp)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_anomalies_coin_timestamp ON anomalies(coin, timestamp)")
-            
-            conn.commit()
+                # Indexes
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_coin_timestamp ON ohlcv(coin, timestamp)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_etl_logs_coin_timestamp ON etl_logs(coin, timestamp)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_anomalies_coin_timestamp ON anomalies(coin, timestamp)")
+                conn.commit()
+            else:
+                # SQLite schema
+                # Create OHLCV table
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS ohlcv (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        coin TEXT NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        open REAL NOT NULL,
+                        high REAL NOT NULL,
+                        low REAL NOT NULL,
+                        close REAL NOT NULL,
+                        volume REAL NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(coin, timestamp)
+                    )
+                    """
+                )
+                # Create ETL logs table
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS etl_logs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        coin TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        message TEXT,
+                        records_processed INTEGER DEFAULT 0,
+                        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+                # Create anomalies table
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS anomalies (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        coin TEXT NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        anomaly_type TEXT NOT NULL,
+                        value REAL NOT NULL,
+                        zscore REAL NOT NULL,
+                        threshold REAL NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+                # Indexes for better performance
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_ohlcv_coin_timestamp ON ohlcv(coin, timestamp)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_etl_logs_coin_timestamp ON etl_logs(coin, timestamp)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_anomalies_coin_timestamp ON anomalies(coin, timestamp)")
+                conn.commit()
             logger.info("Database tables created successfully")
     
     @contextmanager
@@ -91,44 +153,85 @@ class DatabaseConnection:
         """Get database connection with context manager"""
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row  # Enable column access by name
+            if self.is_postgres:
+                if psycopg is None:
+                    raise RuntimeError("psycopg is required for Postgres but is not installed")
+                conn = psycopg.connect(self.database_url, row_factory=dict_row)
+            else:
+                conn = sqlite3.connect(self.db_path)
+                conn.row_factory = sqlite3.Row  # Enable column access by name
             yield conn
         except Exception as e:
             if conn:
-                conn.rollback()
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
             logger.error(f"Database error: {e}")
             raise
         finally:
             if conn:
-                conn.close()
+                try:
+                    conn.close()
+                except Exception:
+                    pass
     
+    def _adapt_sql(self, query: str) -> str:
+        """Adapt placeholder style for Postgres if needed."""
+        if self.is_postgres:
+            # naive replacement of sqlite '?' with postgres '%s'
+            # do not replace '??' or named params; our code only uses '?'
+            return query.replace("?", "%s")
+        return query
+
     def execute_query(self, query: str, params: tuple = ()) -> List[Dict[str, Any]]:
         """Execute SELECT query and return results"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(query, params)
+            sql = self._adapt_sql(query)
+            cursor.execute(sql, params)
             rows = cursor.fetchall()
+            if self.is_postgres:
+                # dict_row returns dict already
+                return list(rows)
             return [dict(row) for row in rows]
     
     def execute_update(self, query: str, params: tuple = ()) -> int:
         """Execute INSERT/UPDATE/DELETE query and return affected rows"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(query, params)
+            sql = self._adapt_sql(query)
+            cursor.execute(sql, params)
             conn.commit()
-            return cursor.rowcount
+            try:
+                return cursor.rowcount
+            except Exception:
+                return 0
     
     def insert_ohlcv_data(self, data: List[Dict[str, Any]]) -> int:
         """Insert OHLCV data into database"""
         if not data:
             return 0
         
-        query = """
-            INSERT OR REPLACE INTO ohlcv 
-            (coin, timestamp, open, high, low, close, volume)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """
+        if self.is_postgres:
+            query = (
+                """
+                INSERT INTO ohlcv (coin, timestamp, open, high, low, close, volume)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (coin, timestamp)
+                DO UPDATE SET open = EXCLUDED.open,
+                              high = EXCLUDED.high,
+                              low = EXCLUDED.low,
+                              close = EXCLUDED.close,
+                              volume = EXCLUDED.volume
+                """
+            )
+        else:
+            query = """
+                INSERT OR REPLACE INTO ohlcv 
+                (coin, timestamp, open, high, low, close, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """
         
         records = []
         for record in data:
@@ -157,7 +260,10 @@ class DatabaseConnection:
             cursor = conn.cursor()
             cursor.executemany(query, records)
             conn.commit()
-            return cursor.rowcount
+            try:
+                return cursor.rowcount
+            except Exception:
+                return len(records)
     
     def insert_etl_log(self, coin: str, status: str, message: str = "", records_processed: int = 0):
         """Insert ETL log entry"""
