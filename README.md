@@ -186,12 +186,6 @@ docker run -p 8501:8501 hyperflow
 
 MIT License - see LICENSE file for details
 
-## Support
-
-- 📧 Email: [your-email@domain.com]
-- 🐛 Issues: [GitHub Issues](https://github.com/bendiagi/hyperflow-keyrock/issues)
-- 📖 Docs: [Project Documentation](docs/)
-
 ## Acknowledgments
 
 - CoinGecko for market data API
