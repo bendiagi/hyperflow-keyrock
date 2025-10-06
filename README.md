@@ -1,4 +1,4 @@
-# HyperFlow: AI-Powered Crypto Market Data ETL & 4H OHLC Dashboard 🚀
+# HyperFlow: AI-Powered Crypto Market Data ETLA Dashboard
 
 **Automated Market Data Pipeline with LLM-powered Insights**
 
